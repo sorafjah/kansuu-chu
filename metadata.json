@@ -1,0 +1,5 @@
+{
+  "name": "Math Function Simulator",
+  "description": "An interactive tool for middle school students to explore linear, inverse, and quadratic functions by manipulating coefficients in real-time.",
+  "requestFramePermissions": []
+}
