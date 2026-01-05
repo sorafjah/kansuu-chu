@@ -349,7 +349,8 @@
             });
           }
 
-          const uniqueX = new Set<number>();
+          // FIX: Removed <number> generic to avoid parser error
+          const uniqueX = new Set();
           xValues.forEach(x => {
             uniqueX.add(Math.round(x * 1000) / 1000);
           });
@@ -435,6 +436,7 @@
 
       // Main App Component
       const App = () => {
+        // FIX: Removed generics <FunctionType> and <number> from useState
         const [functionType, setFunctionType] = useState(FunctionType.PROPORTIONAL);
         const [a, setA] = useState(1);
         const [b, setB] = useState(0);
