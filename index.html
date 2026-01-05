@@ -4,9 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>関数シミュレーター</title>
+    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Babel Standalone for in-browser JSX/TSX compilation -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
     <style>
-      /* Custom slider styling for better touch targets */
+      /* Custom slider styling */
       input[type=range]::-webkit-slider-thumb {
         -webkit-appearance: none;
         appearance: none;
@@ -16,21 +20,25 @@
         cursor: pointer;
         border-radius: 50%;
         margin-top: -8px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.3);
       }
       input[type=range]::-webkit-slider-runnable-track {
         width: 100%;
         height: 4px;
         cursor: pointer;
-        background: #e5e7eb;
+        background: #e2e8f0;
         border-radius: 2px;
+      }
+      input[type=range]:focus {
+        outline: none;
       }
     </style>
   <script type="importmap">
 {
   "imports": {
-    "react/": "https://esm.sh/react@^19.2.3/",
     "react": "https://esm.sh/react@^19.2.3",
     "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "react/": "https://esm.sh/react@^19.2.3/",
     "recharts": "https://esm.sh/recharts@^3.6.0"
   }
 }
@@ -38,6 +46,453 @@
 </head>
   <body class="bg-slate-50 text-slate-900 antialiased">
     <div id="root"></div>
-    <script type="module" src="./index.tsx"></script>
+
+    <!-- Main Application Script -->
+    <script type="text/babel" data-presets="react,typescript">
+      import React, { useState, useMemo } from 'https://esm.sh/react@18.2.0';
+      import ReactDOM from 'https://esm.sh/react-dom@18.2.0/client';
+      import {
+        LineChart,
+        Line,
+        XAxis,
+        YAxis,
+        CartesianGrid,
+        ResponsiveContainer,
+        ReferenceLine
+      } from 'https://esm.sh/recharts@2.12.3?external=react,react-dom';
+
+      // --- TYPES & DEFINITIONS ---
+
+      enum FunctionType {
+        PROPORTIONAL = 'proportional', // y = ax
+        INVERSE = 'inverse',           // y = a/x
+        LINEAR = 'linear',             // y = ax + b
+        QUADRATIC = 'quadratic',       // y = ax^2
+      }
+
+      interface FunctionConfig {
+        type: FunctionType;
+        label: string;
+        formula: string;
+        description: string;
+        hasB: boolean;
+      }
+
+      const FUNCTION_DEFS: Record<FunctionType, FunctionConfig> = {
+        [FunctionType.PROPORTIONAL]: {
+          type: FunctionType.PROPORTIONAL,
+          label: '比例',
+          formula: 'y = ax',
+          description: '原点を通る直線です。aの値によって傾きが変わります。',
+          hasB: false,
+        },
+        [FunctionType.INVERSE]: {
+          type: FunctionType.INVERSE,
+          label: '反比例',
+          formula: 'y = a/x',
+          description: '双曲線を描きます。xが0のときは定義されません。',
+          hasB: false,
+        },
+        [FunctionType.LINEAR]: {
+          type: FunctionType.LINEAR,
+          label: '一次関数',
+          formula: 'y = ax + b',
+          description: '直線のグラフです。aは傾き、bは切片を表します。',
+          hasB: true,
+        },
+        [FunctionType.QUADRATIC]: {
+          type: FunctionType.QUADRATIC,
+          label: '二次関数',
+          formula: 'y = ax²',
+          description: '放物線を描きます。aの正負で開き方が変わります。',
+          hasB: false,
+        },
+      };
+
+      // --- UTILS ---
+
+      const decimalToFraction = (val: number) => {
+        const sign = val < 0 ? -1 : 1;
+        const abs = Math.abs(val);
+        
+        if (Math.abs(abs - Math.round(abs)) < 0.0001) {
+          return { n: Math.round(abs), d: 1, sign };
+        }
+
+        let n = abs;
+        let d = 1;
+        while (Math.abs(n - Math.round(n)) > 0.0001 && d < 100) {
+          n *= 10;
+          d *= 10;
+        }
+        n = Math.round(n);
+        
+        const gcd = (x: number, y: number): number => (!y ? x : gcd(y, x % y));
+        const divisor = gcd(n, d);
+        
+        return { n: n / divisor, d: d / divisor, sign };
+      };
+
+      // --- COMPONENTS ---
+
+      // Fraction Display Component
+      const FractionDisplay = ({ 
+        val, 
+        variable = '', 
+        isInverse = false,
+        forceSign = false 
+      }: { 
+        val: number, 
+        variable?: string, 
+        isInverse?: boolean,
+        forceSign?: boolean 
+      }) => {
+        if (val === 0) return <span className="mx-1">0</span>;
+
+        const { n, d, sign } = decimalToFraction(val);
+        const showSign = sign < 0 || forceSign;
+        const signChar = sign < 0 ? '-' : '+';
+
+        if (isInverse) {
+          const denomDisplay = d === 1 ? 'x' : <>{d}<span className="italic">x</span></>;
+          return (
+            <div className="inline-flex items-center mx-1">
+              {showSign && <span className="mr-1.5 font-bold mb-[1px]">{signChar}</span>}
+              <div className="flex flex-col items-center text-center leading-none">
+                <span className="border-b-2 border-indigo-700 pb-0.5 px-1 w-full">{n}</span>
+                <span className="pt-0.5 px-1">{denomDisplay}</span>
+              </div>
+            </div>
+          );
+        }
+
+        let coefContent: React.ReactNode = null;
+        if (d === 1) {
+          if (n === 1 && variable) {
+            coefContent = null;
+          } else {
+            coefContent = <span>{n}</span>;
+          }
+        } else {
+          coefContent = (
+            <div className="inline-flex flex-col items-center text-center leading-none align-middle mx-1">
+              <span className="border-b-2 border-indigo-700 pb-0.5 px-1 w-full">{n}</span>
+              <span className="pt-0.5 px-1">{d}</span>
+            </div>
+          );
+        }
+
+        return (
+          <div className="inline-flex items-center">
+            {(showSign) && <span className={`mr-1 font-bold mb-[1px]`}>{signChar}</span>}
+            {coefContent}
+            {variable && <span className="italic ml-0.5">{variable}</span>}
+          </div>
+        );
+      };
+
+      // Control Panel Component
+      const ControlPanel = ({
+        currentType,
+        onTypeChange,
+        a,
+        setA,
+        b,
+        setB,
+      }: {
+        currentType: FunctionType;
+        onTypeChange: (type: FunctionType) => void;
+        a: number;
+        setA: (val: number) => void;
+        b: number;
+        setB: (val: number) => void;
+      }) => {
+        const currentDef = FUNCTION_DEFS[currentType];
+
+        const handleSliderChange = (setter: (val: number) => void) => (e: React.ChangeEvent<HTMLInputElement>) => {
+          setter(parseFloat(e.target.value));
+        };
+
+        const handleNumberChange = (setter: (val: number) => void) => (e: React.ChangeEvent<HTMLInputElement>) => {
+          const val = parseFloat(e.target.value);
+          if (!isNaN(val)) {
+            setter(val);
+          }
+        };
+
+        const renderFormula = () => {
+          return (
+            <div className="flex flex-wrap items-center justify-center text-3xl text-indigo-700 font-serif min-h-[3rem]">
+              <span className="mr-2 italic">y =</span>
+              
+              {currentType === FunctionType.PROPORTIONAL && (
+                a === 0 ? <span>0</span> : <FractionDisplay val={a} variable="x" />
+              )}
+
+              {currentType === FunctionType.INVERSE && (
+                a === 0 ? <span>0</span> : <FractionDisplay val={a} isInverse />
+              )}
+
+              {currentType === FunctionType.LINEAR && (
+                <>
+                  {a === 0 ? (b === 0 ? <span>0</span> : null) : <FractionDisplay val={a} variable="x" />}
+                  {(b !== 0 || a === 0) && (
+                    <FractionDisplay 
+                      val={b} 
+                      forceSign={a !== 0 && b > 0} 
+                    />
+                  )}
+                </>
+              )}
+
+              {currentType === FunctionType.QUADRATIC && (
+                a === 0 ? <span>0</span> : <FractionDisplay val={a} variable="x²" />
+              )}
+            </div>
+          );
+        };
+
+        return (
+          <div className="bg-white p-6 rounded-xl shadow-lg border border-slate-200 h-full flex flex-col gap-6">
+            <div>
+              <h2 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-3">関数の種類</h2>
+              <div className="flex flex-wrap gap-2">
+                {Object.values(FUNCTION_DEFS).map((def) => (
+                  <button
+                    key={def.type}
+                    onClick={() => onTypeChange(def.type)}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      currentType === def.type
+                        ? 'bg-indigo-600 text-white shadow-md'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    {def.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="bg-slate-50 p-6 rounded-lg border border-slate-200 text-center flex flex-col items-center justify-center min-h-[140px]">
+              <div className="text-xs text-slate-400 font-mono mb-2">現在の式</div>
+              {renderFormula()}
+              <p className="text-sm text-slate-500 mt-4">{currentDef.description}</p>
+            </div>
+
+            <div className="space-y-6">
+              <h2 className="text-sm font-bold text-slate-500 uppercase tracking-wider">係数の調整</h2>
+              
+              <div className="space-y-2">
+                <div className="flex justify-between items-center">
+                  <label className="font-serif italic font-bold text-lg text-slate-700">a =</label>
+                  <input
+                    type="number"
+                    value={a}
+                    onChange={handleNumberChange(setA)}
+                    step={0.1}
+                    className="w-20 px-2 py-1 text-right border border-slate-300 rounded focus:ring-2 focus:ring-indigo-500 outline-none"
+                  />
+                </div>
+                <input
+                  type="range"
+                  min="-5"
+                  max="5"
+                  step="0.1"
+                  value={a}
+                  onChange={handleSliderChange(setA)}
+                  className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer"
+                />
+              </div>
+
+              {currentDef.hasB && (
+                <div className="space-y-2 pt-2 border-t border-slate-100">
+                   <div className="flex justify-between items-center">
+                    <label className="font-serif italic font-bold text-lg text-slate-700">b =</label>
+                    <input
+                      type="number"
+                      value={b}
+                      onChange={handleNumberChange(setB)}
+                      step={0.1}
+                      className="w-20 px-2 py-1 text-right border border-slate-300 rounded focus:ring-2 focus:ring-indigo-500 outline-none"
+                    />
+                  </div>
+                  <input
+                    type="range"
+                    min="-10"
+                    max="10"
+                    step="0.5"
+                    value={b}
+                    onChange={handleSliderChange(setB)}
+                    className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer"
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      };
+
+      // Graph Component
+      const MathGraph = ({ type, a, b }: { type: FunctionType; a: number; b: number }) => {
+        const data = useMemo(() => {
+          let xValues: number[] = [];
+          const step = 0.1;
+          for (let x = -11; x <= 11; x += step) {
+            xValues.push(x);
+          }
+
+          if (type === FunctionType.INVERSE) {
+            const extras = [0.005, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09];
+            extras.forEach(val => {
+              xValues.push(val);
+              xValues.push(-val);
+            });
+          }
+
+          const uniqueX = new Set<number>();
+          xValues.forEach(x => {
+            uniqueX.add(Math.round(x * 1000) / 1000);
+          });
+          
+          const sortedX = Array.from(uniqueX).sort((u, v) => u - v);
+
+          return sortedX.map(x => {
+            let y: number | null = 0;
+            switch (type) {
+              case FunctionType.PROPORTIONAL:
+                y = a * x;
+                break;
+              case FunctionType.INVERSE:
+                if (Math.abs(x) < 0.0001) {
+                   y = null;
+                } else {
+                   y = a / x;
+                }
+                break;
+              case FunctionType.LINEAR:
+                y = a * x + b;
+                break;
+              case FunctionType.QUADRATIC:
+                y = a * Math.pow(x, 2);
+                break;
+            }
+            return { x, y };
+          });
+        }, [type, a, b]);
+
+        const ticks = useMemo(() => {
+          return Array.from({ length: 21 }, (_, i) => i - 10);
+        }, []);
+
+        return (
+          <div className="w-full h-full bg-white rounded-xl shadow-lg border border-slate-200 p-4 relative overflow-hidden">
+            <div className="absolute top-4 right-4 z-10 bg-indigo-50 px-3 py-1 rounded text-xs text-indigo-800 font-bold border border-indigo-100">
+              グラフ
+            </div>
+            
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart
+                data={data}
+                margin={{ top: 10, right: 10, left: 10, bottom: 10 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                <XAxis
+                  dataKey="x"
+                  type="number"
+                  domain={[-10, 10]}
+                  allowDataOverflow={true}
+                  ticks={ticks}
+                  tick={{ fontSize: 10, fill: '#64748b' }}
+                  stroke="#94a3b8"
+                  interval={0}
+                />
+                <YAxis
+                  dataKey="y"
+                  type="number"
+                  domain={[-10, 10]}
+                  allowDataOverflow={true}
+                  ticks={ticks}
+                  tick={{ fontSize: 10, fill: '#64748b' }}
+                  stroke="#94a3b8"
+                  interval={0}
+                />
+                <ReferenceLine x={0} stroke="#475569" strokeWidth={2} />
+                <ReferenceLine y={0} stroke="#475569" strokeWidth={2} />
+                <Line
+                  type="monotone"
+                  dataKey="y"
+                  stroke="#4f46e5"
+                  strokeWidth={3}
+                  dot={false}
+                  isAnimationActive={false}
+                  connectNulls={false}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        );
+      };
+
+      // Main App Component
+      const App = () => {
+        const [functionType, setFunctionType] = useState(FunctionType.PROPORTIONAL);
+        const [a, setA] = useState(1);
+        const [b, setB] = useState(0);
+
+        const handleTypeChange = (newType) => {
+          setFunctionType(newType);
+          if (newType === FunctionType.QUADRATIC) {
+            setA(1);
+            setB(0);
+          } else if (newType === FunctionType.INVERSE) {
+            setA(2);
+            setB(0);
+          } else {
+            setA(1);
+            setB(0);
+          }
+        };
+
+        return (
+          <div className="min-h-screen bg-slate-100 p-4 md:p-8 font-sans">
+            <div className="max-w-6xl mx-auto space-y-6">
+              <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-200">
+                <div>
+                  <h1 className="text-2xl md:text-3xl font-bold text-slate-800">関数シミュレーター</h1>
+                  <p className="text-slate-500 mt-1 text-sm">中学生向け数学学習ツール</p>
+                </div>
+                <div className="text-xs text-indigo-500 font-medium bg-indigo-50 px-3 py-1 rounded-full">
+                  係数を動かしてグラフの変化を見よう
+                </div>
+              </header>
+
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 h-auto lg:h-[600px]">
+                <div className="lg:col-span-4 h-full">
+                  <ControlPanel
+                    currentType={functionType}
+                    onTypeChange={handleTypeChange}
+                    a={a}
+                    setA={setA}
+                    b={b}
+                    setB={setB}
+                  />
+                </div>
+                <div className="lg:col-span-8 h-[400px] lg:h-full">
+                  <MathGraph
+                    type={functionType}
+                    a={a}
+                    b={b}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      // Mount App
+      const root = ReactDOM.createRoot(document.getElementById('root'));
+      root.render(<App />);
+    </script>
   </body>
 </html>
